@@ -3,6 +3,7 @@
 extern crate getopts;
 extern crate owning_ref;
 extern crate flate2;
+extern crate termion;
 
 extern crate syntax;
 extern crate rustc_data_structures;
@@ -17,6 +18,7 @@ extern crate rustc_driver;
 extern crate rustc_trans_utils;
 
 use std::path::{Path, PathBuf};
+use std::fmt;
 
 use rustc::ty::TyCtxt;
 use rustc::session::Session;
@@ -24,6 +26,57 @@ use rustc::hir::def::{Export, Def};
 use rustc_metadata::cstore::CrateMetadata;
 use rustc_driver::{Compilation, RustcDefaultCalls};
 use rustc_driver::driver::CompileController;
+
+use termion::color::*;
+
+struct PrettyBool(bool);
+
+impl fmt::Display for PrettyBool {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.0 {
+            true => write!(f, "{}true{}", Fg(Green), Fg(Reset)),
+            false => write!(f, "{}false{}", Fg(Red), Fg(Reset)),
+        }
+    }
+}
+
+macro_rules! header {
+    ($the_string:expr) => {
+        println!(concat!("\n{}", $the_string, "{}"), Fg(Yellow), Fg(Reset));
+    };
+}
+
+macro_rules! line {
+    ($name:expr, $fmt:expr, $($e:tt)*) => {
+        println!(concat!("    {}{:<26}{}: ", $fmt), Fg(Cyan), $name, Fg(Reset), $($e)*);
+    };
+}
+
+macro_rules! svmeta {
+    ( @one $crate_data:expr; bool $name:ident) => {
+        svmeta!(@print $name, PrettyBool($crate_data.$name()));
+    };
+    ( @one $crate_data:expr; bool $name:ident ($arg:expr)) => {
+        svmeta!(@print $name, PrettyBool($crate_data.$name($arg)));
+    };
+    ( @one $crate_data:expr; $name:ident) => {
+        svmeta!(@print $name, $crate_data.$name());
+    };
+    ( @one $crate_data:expr; $name:ident ($arg:expr)) => {
+        svmeta!(@print $name, $crate_data.$name($arg));
+    };
+    ( @one $crate_data:expr; $name:ident . $call:ident) => {
+        svmeta!(@print $name, $crate_data.$name().$call());
+    };
+    ( @print $name:ident, $val:expr) => {
+        println!("{}{:<30}{}: {}", Fg(Cyan), stringify!($name), Fg(Reset), $val);
+    };
+    ( $crate_data:expr; $( ($($tts:tt)*) )* ) => {
+        $(
+            svmeta!(@one $crate_data; $($tts)*);
+        )*
+    };
+}
 
 fn find_sysroot() -> String {
     if let Ok(sysroot) = std::env::var("MIRI_SYSROOT") {
@@ -118,81 +171,50 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
     use rustc::middle::lang_items::LangItem;
     use rustc_metadata::cstore::NativeLibraryKind;
 
-    macro_rules! svmeta {
-        ( @one $crate_data:expr; if $name:ident) => {
-            if $crate_data.$name() {
-                svmeta!(@print $name, $crate_data.$name());
-            }
-        };
-        ( @one $crate_data:expr; if $name:ident ($arg:expr)) => {
-            if $crate_data.$name($arg) {
-                svmeta!(@print $name, $crate_data.$name($arg));
-            }
-        };
-        ( @one $crate_data:expr; $name:ident) => {
-            svmeta!(@print $name, $crate_data.$name());
-        };
-        ( @one $crate_data:expr; $name:ident ($arg:expr)) => {
-            svmeta!(@print $name, $crate_data.$name($arg));
-        };
-        ( @one $crate_data:expr; $name:ident . $call:ident) => {
-            svmeta!(@print $name, $crate_data.$name().$call());
-        };
-        ( @print $name:ident, $val:expr) => {
-            let name = stringify!($name);
-            println!("{:<30}: {}", name, $val);
-        };
-        ( $crate_data:expr; $( ($($tts:tt)*) )* ) => {
-            $(
-                svmeta!(@one $crate_data; $($tts)*);
-            )*
-        };
-    }
-    //println!("Name: {}", crate_data.name());
-    //println!("Hash: {}", crate_data.hash());
-    //println!("Disambiguator: {}", crate_data.disambiguator().to_fingerprint());
     svmeta! {
         crate_data;
         (name)
         (hash)
         (disambiguator.to_fingerprint)
-        (needs_allocator(tcx.sess))
-        (if has_global_allocator)
-        (if has_default_lib_allocator)
-        (if is_panic_runtime(tcx.sess))
-        (if needs_panic_runtime(tcx.sess))
-        (if is_compiler_builtins(tcx.sess))
-        (if is_sanitizer_runtime(tcx.sess))
-        (if is_profiler_runtime(tcx.sess))
-        (if is_no_builtins(tcx.sess))
-        (if has_copy_closures(tcx.sess))
-        (if has_clone_closures(tcx.sess))
+        (bool needs_allocator(tcx.sess))
+        (bool has_global_allocator)
+        (bool has_default_lib_allocator)
+        (bool is_panic_runtime(tcx.sess))
+        (bool needs_panic_runtime(tcx.sess))
+        (bool is_compiler_builtins(tcx.sess))
+        (bool is_sanitizer_runtime(tcx.sess))
+        (bool is_profiler_runtime(tcx.sess))
+        (bool is_no_builtins(tcx.sess))
+        (bool has_copy_closures(tcx.sess))
+        (bool has_clone_closures(tcx.sess))
         (panic_strategy.desc)
     }
 
-    println!("crate source: {} {} {}",
+    println!("{}crate source{}: {} {} {}",
+        Fg(Cyan), Fg(Reset),
         crate_data.source.dylib.as_ref().map(|&(ref p, kind)|format!("{} ({:?})", p.display(), kind)).unwrap_or_else(||String::new()),
         crate_data.source.rlib .as_ref().map(|&(ref p, kind)|format!("{} ({:?})", p.display(), kind)).unwrap_or_else(||String::new()),
         crate_data.source.rmeta.as_ref().map(|&(ref p, kind)|format!("{} ({:?})", p.display(), kind)).unwrap_or_else(||String::new()));
 
-    println!("\nLang items:");
+    header!("Lang items:");
     for lang_item in crate_data.get_lang_items() {
-        println!("    {:<26}: {}",
+        line!(
             // Double format for the alignment
             format!("{:?}", LangItem::from_u32(lang_item.1 as u32).unwrap()),
+            "{}",
             tcx.absolute_item_path_str(lang_item.0),
         );
     }
 
-    println!("\nDependent rlibs");
+    header!("Dependent rlibs");
     for dep in crate_data.root.crate_deps.decode(crate_data) {
-        println!("    {:<26}: {:?} ({})", dep.name, dep.kind, dep.hash);
+        line!(dep.name, "{:?} ({})", dep.kind, dep.hash);
     }
 
-    println!("\nNative libraries:");
+    header!("Native libraries:");
     for native_lib in crate_data.get_native_libraries(tcx.sess) {
-        println!("    {:<26}: {}",
-            native_lib.name,
+        line!(native_lib.name,
+            "{}",
             match native_lib.kind {
                 NativeLibraryKind::NativeStatic => "static lib",
                 NativeLibraryKind::NativeStaticNobundle => "static lib, not bundled",
@@ -202,19 +224,19 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
         );
     }
 
-    println!("\nDylib dependency formats:");
+    header!("Dylib dependency formats:");
     for dylib_deps in crate_data.get_dylib_dependency_formats() {
         let ext_crate_data = tcx.crate_data_as_rc_any(dylib_deps.0);
         let ext_crate_data = ext_crate_data.downcast_ref::<CrateMetadata>().unwrap();
-        println!("    {:<26}: {:?}", ext_crate_data.name(), dylib_deps.1);
+        line!(ext_crate_data.name(), "{:?}", dylib_deps.1);
     }
 
-    println!("\nProc macros:");
+    header!("Proc macros:");
     for &(ref proc_macro_name, ref syntax_ext) in crate_data.proc_macros.as_ref().map(|m|&**m).unwrap_or(&[]) {
-        println!("    {:<26}: {:?}", proc_macro_name, syntax_ext.kind());
+        line!(proc_macro_name, "{:?}", syntax_ext.kind());
     }
 
-    println!("\nMacros:");
+    header!("Macros:");
     for_each_export(tcx, &crate_data, tcx.sess, &|export| {
         use syntax::ext::base::MacroKind;
         match export.def {
@@ -229,7 +251,7 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
         }
     });
 
-    println!("\nExported symbols:");
+    header!("Exported symbols:");
     if crate_data.proc_macros.is_none() {
         for def_id in crate_data.get_exported_symbols().into_iter().take(50) {
             println!("    {}", tcx.absolute_item_path_str(def_id));
@@ -239,14 +261,14 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
         println!("Sorry exported symbols reading not supported for proc macros at the moment :(");
     }
 
-    println!("\nTrait impls:");
+    header!("Trait impls:");
     let mut trait_impls = Vec::new();
     crate_data.get_implementations_for_trait(None, &mut trait_impls);
     for def_id in trait_impls.into_iter().take(50) {
         println!("    {}", tcx.absolute_item_path_str(def_id));
     }
 
-    println!("\nTypes:");
+    header!("Types:");
     for_each_export(tcx, &crate_data, tcx.sess, &|export| {
         match export.def {
             Def::Struct(_) |
@@ -259,7 +281,7 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
         }
     });
 
-    println!("\nItems:");
+    header!("Items:");
     for_each_export(tcx, &crate_data, tcx.sess, &|export| {
         match export.def {
             Def::Fn(_) |
@@ -288,7 +310,7 @@ fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_dat
                 Def::Mod(def_id) => each_export_inner(tcx, crate_data, def_id.index, callback, sess),
                 _ => {
                     if let Some(name) = callback(e) {
-                        println!("    {:<10} {}", name, tcx.absolute_item_path_str(e.def.def_id()));
+                        println!("    {}{:<10}{} {}", Fg(Cyan), name, Fg(Reset), tcx.absolute_item_path_str(e.def.def_id()));
                     }
                 },
             }
