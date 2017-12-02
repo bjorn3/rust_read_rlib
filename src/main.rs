@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use rustc::ty::TyCtxt;
 use rustc::session::Session;
+use rustc::hir::def::{Export, Def};
 use rustc_metadata::cstore::CrateMetadata;
 use rustc_driver::{Compilation, RustcDefaultCalls};
 use rustc_driver::driver::CompileController;
@@ -77,7 +78,7 @@ impl syntax::codemap::FileLoader for MyFileLoader {
         #![feature(compiler_builtins_lib)]
         #![allow(unused_imports)]
         #![no_std] // Replace with `#![no_core]` for reading libcore metadata
-        extern crate {};
+        extern crate {} as __dummy_name;
         fn main() {{}}", self.0))
     }
 }
@@ -159,6 +160,7 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
         (if has_global_allocator)
         (if has_default_lib_allocator)
         (if is_panic_runtime(tcx.sess))
+        (if needs_panic_runtime(tcx.sess))
         (if is_compiler_builtins(tcx.sess))
         (if is_sanitizer_runtime(tcx.sess))
         (if is_profiler_runtime(tcx.sess))
@@ -175,8 +177,9 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
 
     println!("\nLang items:");
     for lang_item in crate_data.get_lang_items() {
-        println!("    {:<26?}: {}",
-            LangItem::from_u32(lang_item.1 as u32).unwrap(),
+        println!("    {:<26}: {}",
+            // Double format for the alignment
+            format!("{:?}", LangItem::from_u32(lang_item.1 as u32).unwrap()),
             tcx.absolute_item_path_str(lang_item.0),
         );
     }
@@ -211,6 +214,21 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
         println!("    {:<26}: {:?}", proc_macro_name, syntax_ext.kind());
     }
 
+    println!("\nMacros:");
+    for_each_export(tcx, &crate_data, tcx.sess, &|export| {
+        use syntax::ext::base::MacroKind;
+        match export.def {
+            Def::Macro(_def_id, macro_kind) => {
+                Some(match macro_kind {
+                    MacroKind::Bang => "macro!",
+                    MacroKind::Attr => "#[macro]",
+                    MacroKind::Derive => "#[derive(Macro)]"
+                })
+            }
+            _ => None
+        }
+    });
+
     println!("\nExported symbols:");
     if crate_data.proc_macros.is_none() {
         for def_id in crate_data.get_exported_symbols().into_iter().take(50) {
@@ -227,4 +245,54 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
     for def_id in trait_impls.into_iter().take(50) {
         println!("    {}", tcx.absolute_item_path_str(def_id));
     }
+
+    println!("\nTypes:");
+    for_each_export(tcx, &crate_data, tcx.sess, &|export| {
+        match export.def {
+            Def::Struct(_) |
+            Def::Union(_) |
+            Def::Enum(_) |
+            Def::Trait(_) |
+            Def::TyForeign(_) => Some(export.def.kind_name()),
+            Def::TyAlias(_) => Some("type"),
+            _ => None
+        }
+    });
+
+    println!("\nItems:");
+    for_each_export(tcx, &crate_data, tcx.sess, &|export| {
+        match export.def {
+            Def::Fn(_) |
+            Def::Struct(_) |
+            Def::Union(_) |
+            Def::Enum(_) |
+            Def::Trait(_) |
+            Def::TyAlias(_) |
+            Def::TyForeign(_) |
+            Def::Macro(_, _) => None, // Already handled
+            Def::StructCtor(_, _) |
+            Def::Variant(_) |
+            Def::VariantCtor(_, _) => None, // Not very useful
+            Def::Const(_) => Some("const"),
+            Def::Static(_, _) => Some("static"),
+            _ => Some(export.def.kind_name()),
+        }
+    });
+}
+
+fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, sess: &Session, callback: &F) {
+    use rustc::hir::def_id::DefIndex;
+    fn each_export_inner<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, id: DefIndex, callback: &F, sess: &Session) {
+        crate_data.each_child_of_item(id, |e| {
+            match e.def {
+                Def::Mod(def_id) => each_export_inner(tcx, crate_data, def_id.index, callback, sess),
+                _ => {
+                    if let Some(name) = callback(e) {
+                        println!("    {:<10} {}", name, tcx.absolute_item_path_str(e.def.def_id()));
+                    }
+                },
+            }
+        }, sess);
+    }
+    each_export_inner(tcx, crate_data, ::rustc::hir::def_id::CRATE_DEF_INDEX, callback, sess);
 }
