@@ -2,10 +2,12 @@ use std::fmt;
 
 use rustc::ty::TyCtxt;
 use rustc::session::Session;
+use rustc::middle::lang_items::LangItem;
 use rustc::hir::def::{Export, Def};
-use rustc_metadata::cstore::CrateMetadata;
+use rustc_metadata::cstore::{CrateMetadata, NativeLibraryKind};
 
 use termion::color::*;
+use clap::{App, SubCommand, Arg, ArgMatches};
 
 struct PrettyBool(bool);
 
@@ -24,42 +26,65 @@ macro_rules! header {
     };
 }
 
-macro_rules! line {
+macro_rules! out_line {
     ($name:expr, $fmt:expr, $($e:tt)*) => {
         println!(concat!("    {}{:<26}{}: ", $fmt), Fg(Cyan), $name, Fg(Reset), $($e)*);
     };
 }
 
-macro_rules! svmeta {
-    ( @one $crate_data:expr; bool $name:ident) => {
-        svmeta!(@print $name, PrettyBool($crate_data.$name()));
-    };
-    ( @one $crate_data:expr; bool $name:ident ($arg:expr)) => {
-        svmeta!(@print $name, PrettyBool($crate_data.$name($arg)));
-    };
-    ( @one $crate_data:expr; $name:ident) => {
-        svmeta!(@print $name, $crate_data.$name());
-    };
-    ( @one $crate_data:expr; $name:ident ($arg:expr)) => {
-        svmeta!(@print $name, $crate_data.$name($arg));
-    };
-    ( @one $crate_data:expr; $name:ident . $call:ident) => {
-        svmeta!(@print $name, $crate_data.$name().$call());
-    };
-    ( @print $name:ident, $val:expr) => {
-        println!("{}{:<30}{}: {}", Fg(Cyan), stringify!($name), Fg(Reset), $val);
-    };
-    ( $crate_data:expr; $( ($($tts:tt)*) )* ) => {
-        $(
-            svmeta!(@one $crate_data; $($tts)*);
-        )*
-    };
+macro_rules! commands {
+    ($($cmd:ident = $about:expr;)*) => {
+        pub fn subcommands<'a, 'b>() -> Vec<App<'a, 'b>> where 'a: 'b {
+            vec![
+                $(SubCommand::with_name(stringify!($cmd))
+                    .about($about),)*
+            ]
+        }
+
+        pub fn print_for_matches(matches: &ArgMatches, tcx: TyCtxt, crate_data: &CrateMetadata) {
+            let cmd = matches.subcommand_name();
+            match cmd.unwrap() {
+                $(stringify!($cmd) => concat_idents!(print_, $cmd)(tcx, crate_data),)*
+                _ => unreachable!(),
+            }
+        }
+    }
 }
 
-pub fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
-    use rustc::middle::lang_items::LangItem;
-    use rustc_metadata::cstore::NativeLibraryKind;
+commands! {
+    metadata = "print_metadata";
+    lang_items = "print declared lang items";
+    deps = "print dependencies";
+    macros = "print declared and reexported (proc)macros";
+    symbols = "print exported symbols";
+}
 
+fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
+    macro_rules! svmeta {
+        ( @one $crate_data:expr; bool $name:ident) => {
+            svmeta!(@print $name, PrettyBool($crate_data.$name()));
+        };
+        ( @one $crate_data:expr; bool $name:ident ($arg:expr)) => {
+            svmeta!(@print $name, PrettyBool($crate_data.$name($arg)));
+        };
+        ( @one $crate_data:expr; $name:ident) => {
+            svmeta!(@print $name, $crate_data.$name());
+        };
+        ( @one $crate_data:expr; $name:ident ($arg:expr)) => {
+            svmeta!(@print $name, $crate_data.$name($arg));
+        };
+        ( @one $crate_data:expr; $name:ident . $call:ident) => {
+            svmeta!(@print $name, $crate_data.$name().$call());
+        };
+        ( @print $name:ident, $val:expr) => {
+            println!("{}{:<30}{}: {}", Fg(Cyan), stringify!($name), Fg(Reset), $val);
+        };
+        ( $crate_data:expr; $( ($($tts:tt)*) )* ) => {
+            $(
+                svmeta!(@one $crate_data; $($tts)*);
+            )*
+        };
+    }
     svmeta! {
         crate_data;
         (name)
@@ -84,25 +109,29 @@ pub fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
         crate_data.source.dylib.as_ref().map(|&(ref p, kind)|format!("{} ({:?})", p.display(), kind)).unwrap_or_else(||String::new()),
         crate_data.source.rlib .as_ref().map(|&(ref p, kind)|format!("{} ({:?})", p.display(), kind)).unwrap_or_else(||String::new()),
         crate_data.source.rmeta.as_ref().map(|&(ref p, kind)|format!("{} ({:?})", p.display(), kind)).unwrap_or_else(||String::new()));
+}
 
+fn print_lang_items(tcx: TyCtxt, crate_data: &CrateMetadata) {
     header!("Lang items:");
     for lang_item in crate_data.get_lang_items() {
-        line!(
+        out_line!(
             // Double format for the alignment
             format!("{:?}", LangItem::from_u32(lang_item.1 as u32).unwrap()),
             "{}",
             tcx.absolute_item_path_str(lang_item.0),
         );
     }
+}
 
+fn print_deps(tcx: TyCtxt, crate_data: &CrateMetadata) {
     header!("Dependent rlibs");
     for dep in crate_data.root.crate_deps.decode(crate_data) {
-        line!(dep.name, "{:?} ({})", dep.kind, dep.hash);
+        out_line!(dep.name, "{:?} ({})", dep.kind, dep.hash);
     }
 
     header!("Native libraries:");
     for native_lib in crate_data.get_native_libraries(tcx.sess) {
-        line!(native_lib.name,
+        out_line!(native_lib.name,
             "{}",
             match native_lib.kind {
                 NativeLibraryKind::NativeStatic => "static lib",
@@ -117,12 +146,14 @@ pub fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
     for dylib_deps in crate_data.get_dylib_dependency_formats() {
         let ext_crate_data = tcx.crate_data_as_rc_any(dylib_deps.0);
         let ext_crate_data = ext_crate_data.downcast_ref::<CrateMetadata>().unwrap();
-        line!(ext_crate_data.name(), "{:?}", dylib_deps.1);
+        out_line!(ext_crate_data.name(), "{:?}", dylib_deps.1);
     }
+}
 
+fn print_macros(tcx: TyCtxt, crate_data: &CrateMetadata) {
     header!("Proc macros:");
     for &(ref proc_macro_name, ref syntax_ext) in crate_data.proc_macros.as_ref().map(|m|&**m).unwrap_or(&[]) {
-        line!(proc_macro_name, "{:?}", syntax_ext.kind());
+        out_line!(proc_macro_name, "{:?}", syntax_ext.kind());
     }
 
     header!("Macros:");
@@ -139,7 +170,9 @@ pub fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
             _ => None
         }
     });
+}
 
+fn print_symbols(tcx: TyCtxt, crate_data: &CrateMetadata) {
     header!("Exported symbols:");
     if crate_data.proc_macros.is_none() {
         for def_id in crate_data.get_exported_symbols().into_iter().take(50) {

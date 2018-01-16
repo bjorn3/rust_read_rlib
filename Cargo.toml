@@ -5,3 +5,4 @@ authors = ["bjorn3 <bjorn3@users.noreply.github.com>"]
 
 [dependencies]
 termion = "1.5"
+clap = "2.29.1"

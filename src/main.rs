@@ -1,9 +1,10 @@
-#![feature(rustc_private)]
+#![feature(rustc_private, concat_idents)]
 
 extern crate getopts;
 extern crate owning_ref;
 extern crate flate2;
 extern crate termion;
+extern crate clap;
 
 extern crate syntax;
 extern crate rustc_data_structures;
@@ -19,11 +20,26 @@ extern crate rustc_trans_utils;
 
 use std::rc::Rc;
 
+use clap::{Arg, App};
+
 mod driver;
 mod print;
 
 fn main() {
-    let rlib = ::std::env::args().skip(1).next().expect("No rlib given");
-    let args = ::std::env::args().collect::<Vec<_>>();
-    driver::call_with_crate_tcx(args, &rlib, Rc::new(|tcx, metadata| print::print_metadata(tcx, metadata)));
+    let matches = App::new("read rlib")
+        .version("0.1")
+        .author("bjorn3")
+        .about("Read a rlib created by rustc")
+        .arg(Arg::with_name("CRATE")
+            .help("The crate name")
+            .required(true)
+            .index(1))
+        .subcommands(print::subcommands())
+        .get_matches();
+    let rlib = matches.value_of("CRATE").unwrap().to_string();
+    //let args = ::std::env::args().collect::<Vec<_>>();
+    let args = vec![rlib.clone(), "/some_nonexistent_dummy_path".to_string()];
+    driver::call_with_crate_tcx(args, &rlib, Rc::new(move |tcx, metadata| {
+        print::print_for_matches(&matches, tcx, metadata);
+    }));
 }
