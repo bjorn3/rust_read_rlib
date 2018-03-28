@@ -4,10 +4,12 @@ use rustc::ty::TyCtxt;
 use rustc::session::Session;
 use rustc::middle::lang_items::LangItem;
 use rustc::hir::def::{Export, Def};
+use rustc::hir::def_id::{DefId, CrateNum, DefIndex, DefIndexAddressSpace};
 use rustc_metadata::cstore::{CrateMetadata, NativeLibraryKind};
 
 use termion::color::*;
 use clap::{App, SubCommand, Arg, ArgMatches};
+use regex::Regex;
 
 struct PrettyBool(bool);
 
@@ -33,18 +35,28 @@ macro_rules! out_line {
 }
 
 macro_rules! commands {
-    ($($cmd:ident = $about:expr;)*) => {
+    ($($cmd:ident($($arg:ident),*) = $about:expr;)*) => {
         pub fn subcommands<'a, 'b>() -> Vec<App<'a, 'b>> where 'a: 'b {
             vec![
                 $(SubCommand::with_name(stringify!($cmd))
-                    .about($about),)*
+                    .about($about)
+                    $(
+                        .arg(Arg::with_name(stringify!($arg)).required(true))
+                    )*
+                ),*
             ]
         }
 
         pub fn print_for_matches(matches: &ArgMatches, tcx: TyCtxt, crate_data: &CrateMetadata) {
             let cmd = matches.subcommand_name();
             match cmd.unwrap() {
-                $(stringify!($cmd) => concat_idents!(print_, $cmd)(tcx, crate_data),)*
+                $(
+                    stringify!($cmd) => concat_idents!(print_, $cmd)(
+                        tcx,
+                        crate_data,
+                        matches.subcommand_matches(stringify!($cmd)).unwrap(),
+                    ),
+                )*
                 _ => unreachable!(),
             }
         }
@@ -52,14 +64,15 @@ macro_rules! commands {
 }
 
 commands! {
-    metadata = "print_metadata";
-    lang_items = "print declared lang items";
-    deps = "print dependencies";
-    macros = "print declared and reexported (proc)macros";
-    symbols = "print exported symbols";
+    metadata() = "print_metadata";
+    lang_items() = "print declared lang items";
+    deps() = "print dependencies";
+    macros() = "print declared and reexported (proc)macros";
+    symbols() = "print exported symbols";
+    mir(DEFID) = "print mir for fn of given def_id";
 }
 
-fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
+fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
     macro_rules! svmeta {
         ( @one $crate_data:expr; bool $name:ident) => {
             svmeta!(@print $name, PrettyBool($crate_data.$name()));
@@ -111,7 +124,7 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata) {
         crate_data.source.rmeta.as_ref().map(|&(ref p, kind)|format!("{} ({:?})", p.display(), kind)).unwrap_or_else(||String::new()));
 }
 
-fn print_lang_items(tcx: TyCtxt, crate_data: &CrateMetadata) {
+fn print_lang_items(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
     header!("Lang items:");
     for lang_item in crate_data.get_lang_items() {
         out_line!(
@@ -123,7 +136,7 @@ fn print_lang_items(tcx: TyCtxt, crate_data: &CrateMetadata) {
     }
 }
 
-fn print_deps(tcx: TyCtxt, crate_data: &CrateMetadata) {
+fn print_deps(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
     header!("Dependent rlibs");
     for dep in crate_data.root.crate_deps.decode(crate_data) {
         out_line!(dep.name, "{:?} ({})", dep.kind, dep.hash);
@@ -150,7 +163,7 @@ fn print_deps(tcx: TyCtxt, crate_data: &CrateMetadata) {
     }
 }
 
-fn print_macros(tcx: TyCtxt, crate_data: &CrateMetadata) {
+fn print_macros(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
     header!("Proc macros:");
     for &(ref proc_macro_name, ref syntax_ext) in crate_data.proc_macros.as_ref().map(|m|&**m).unwrap_or(&[]) {
         out_line!(proc_macro_name, "{:?}", syntax_ext.kind());
@@ -172,11 +185,11 @@ fn print_macros(tcx: TyCtxt, crate_data: &CrateMetadata) {
     });
 }
 
-fn print_symbols(tcx: TyCtxt, crate_data: &CrateMetadata) {
+fn print_symbols(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
     header!("Exported symbols:");
     if crate_data.proc_macros.is_none() {
         for def_id in crate_data.get_exported_symbols().into_iter().take(50) {
-            println!("    {}", tcx.absolute_item_path_str(def_id));
+            println!("    {} ({:?})", tcx.absolute_item_path_str(def_id), def_id);
         }
     } else {
         // FIXME: support it
@@ -224,6 +237,16 @@ fn print_symbols(tcx: TyCtxt, crate_data: &CrateMetadata) {
     });
 }
 
+fn print_mir(tcx: TyCtxt, _crate_data: &CrateMetadata, matches: &ArgMatches) {
+    let def_id = matches.value_of("DEFID").unwrap();
+    let def_id = parse_defid_from_str(def_id);
+    println!("mir for {}:\n", tcx.absolute_item_path_str(def_id));
+    let mut mir = ::std::io::Cursor::new(Vec::new());
+    ::rustc_mir::util::write_mir_pretty(tcx, Some(def_id), &mut mir).unwrap();
+    let mir = String::from_utf8(mir.into_inner()).unwrap();
+    println!("{}", mir);
+}
+
 fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, sess: &Session, callback: &F) {
     use rustc::hir::def_id::DefIndex;
     fn each_export_inner<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, id: DefIndex, callback: &F, sess: &Session) {
@@ -239,4 +262,43 @@ fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_dat
         }, sess);
     }
     each_export_inner(tcx, crate_data, ::rustc::hir::def_id::CRATE_DEF_INDEX, callback, sess);
+}
+
+fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, sess: &Session, callback: &F) {
+    use rustc_metadata::decoder::Metadata;
+    let entries = ::std::collections::HashSet::new();
+    let todo = Vec::new();
+    todo.push(crate_data.root.index.lookup(crate_data.blob.raw_bytes(), ::rustc::hir::def_id::CRATE_DEF_INDEX).unwrap());
+    loop {
+        if let Some(entry) = todo.pop() {
+            if let Some(children) = entry.children {
+                for child in children {
+                    
+                }
+            }
+        } else {
+            break;
+        }
+    }
+}
+fn parse_defid_from_str(s: &str) -> DefId {
+    let regex = Regex::new(r#"(\d+)/(0|1):(\d+)"#).unwrap();
+    // 1/0:14824
+    // ^ ^ ^
+    // | | DefIndex::as_array_index()
+    // | DefIndexAddressSpace
+    // CrateNum
+    let caps = regex.captures(s).expect("Invalid DefId");
+    let crate_num = CrateNum::new(caps.get(1).unwrap().as_str().parse::<usize>().unwrap());
+    let address_space = match caps.get(2).unwrap().as_str().parse::<u8>().unwrap() {
+        0 => DefIndexAddressSpace::Low,
+        1 => DefIndexAddressSpace::High,
+        _ => unreachable!(),
+    };
+    let index = caps.get(3).unwrap().as_str().parse::<usize>().unwrap();
+    let def_index = DefIndex::from_array_index(index, address_space);
+    DefId {
+        krate: crate_num,
+        index: def_index,
+    }
 }
