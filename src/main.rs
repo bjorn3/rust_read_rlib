@@ -15,7 +15,6 @@ extern crate rustc_back;
 extern crate rustc_errors;
 extern crate rustc_metadata;
 extern crate rustc_incremental;
-extern crate rustc_trans;
 extern crate rustc_driver;
 extern crate rustc_trans_utils;
 extern crate rustc_mir;

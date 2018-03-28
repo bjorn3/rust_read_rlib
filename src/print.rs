@@ -3,6 +3,7 @@ use std::fmt;
 use rustc::ty::TyCtxt;
 use rustc::session::Session;
 use rustc::middle::lang_items::LangItem;
+use rustc::middle::exported_symbols::ExportedSymbol;
 use rustc::hir::def::{Export, Def};
 use rustc::hir::def_id::{DefId, CrateNum, DefIndex, DefIndexAddressSpace};
 use rustc_metadata::cstore::{CrateMetadata, NativeLibraryKind};
@@ -112,8 +113,8 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches
         (bool is_sanitizer_runtime(tcx.sess))
         (bool is_profiler_runtime(tcx.sess))
         (bool is_no_builtins(tcx.sess))
-        (bool has_copy_closures(tcx.sess))
-        (bool has_clone_closures(tcx.sess))
+        //(bool has_copy_closures(tcx.sess))
+        //(bool has_clone_closures(tcx.sess))
         (panic_strategy.desc)
     }
 
@@ -188,8 +189,11 @@ fn print_macros(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) 
 fn print_symbols(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
     header!("Exported symbols:");
     if crate_data.proc_macros.is_none() {
-        for def_id in crate_data.get_exported_symbols().into_iter().take(50) {
-            println!("    {} ({:?})", tcx.absolute_item_path_str(def_id), def_id);
+        for (exported_symbol, export_level) in crate_data.exported_symbols().into_iter().take(50) {
+            match exported_symbol {
+                ExportedSymbol::NonGeneric(def_id) => println!("    {:>4?} {} ({:?})", export_level, tcx.absolute_item_path_str(def_id), def_id),
+                ExportedSymbol::NoDefId(symbol_name) => println!("    {:>4?} <no def_id> ({:?})", export_level, symbol_name),
+            }
         }
     } else {
         // FIXME: support it
@@ -252,7 +256,10 @@ fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_dat
     fn each_export_inner<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, id: DefIndex, callback: &F, sess: &Session) {
         crate_data.each_child_of_item(id, |e| {
             match e.def {
-                Def::Mod(def_id) => each_export_inner(tcx, crate_data, def_id.index, callback, sess),
+                Def::Mod(def_id) => {
+                    //println!("mod {}", tcx.absolute_item_path_str(def_id));
+                    each_export_inner(tcx, crate_data, def_id.index, callback, sess);
+                },
                 _ => {
                     if let Some(name) = callback(e) {
                         println!("    {}{:<10}{} {}", Fg(Cyan), name, Fg(Reset), tcx.absolute_item_path_str(e.def.def_id()));
@@ -264,7 +271,7 @@ fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_dat
     each_export_inner(tcx, crate_data, ::rustc::hir::def_id::CRATE_DEF_INDEX, callback, sess);
 }
 
-fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, sess: &Session, callback: &F) {
+/*fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, sess: &Session, callback: &F) {
     use rustc_metadata::decoder::Metadata;
     let entries = ::std::collections::HashSet::new();
     let todo = Vec::new();
@@ -273,14 +280,14 @@ fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_dat
         if let Some(entry) = todo.pop() {
             if let Some(children) = entry.children {
                 for child in children {
-                    
+
                 }
             }
         } else {
             break;
         }
     }
-}
+}*/
 fn parse_defid_from_str(s: &str) -> DefId {
     let regex = Regex::new(r#"(\d+)/(0|1):(\d+)"#).unwrap();
     // 1/0:14824
