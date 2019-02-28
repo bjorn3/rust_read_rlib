@@ -11,15 +11,11 @@ extern crate syntax;
 extern crate rustc_data_structures;
 
 extern crate rustc;
-extern crate rustc_back;
 extern crate rustc_errors;
 extern crate rustc_metadata;
 extern crate rustc_incremental;
 extern crate rustc_driver;
-extern crate rustc_trans_utils;
 extern crate rustc_mir;
-
-use std::rc::Rc;
 
 use clap::{Arg, App};
 
@@ -44,8 +40,10 @@ fn main() {
         let rlib = matches.value_of("CRATE").unwrap().to_string();
         //let args = ::std::env::args().collect::<Vec<_>>();
         let args = vec![rlib.clone(), "/some_nonexistent_dummy_path".to_string()];
-        driver::call_with_crate_tcx(args, &rlib, Rc::new(move |tcx, metadata| {
-            print::print_for_matches(&matches, tcx, metadata);
+        driver::call_with_crate_tcx(args, rlib, Box::new(move |tcx| {
+            driver::with_crate_metadata(tcx, |metadata| {
+                print::print_for_matches(&matches, tcx, metadata);
+            });
         }));
     }).unwrap().join();
 }

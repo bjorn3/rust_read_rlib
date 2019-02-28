@@ -1,11 +1,10 @@
-use std::rc::Rc;
 use std::path::{Path, PathBuf};
 
 use rustc::session::Session;
 use rustc::ty::TyCtxt;
 
 use rustc_metadata::cstore::CrateMetadata;
-use rustc_driver::{Compilation, RustcDefaultCalls};
+use rustc_driver::{Compilation, CompilerCalls, RustcDefaultCalls};
 use rustc_driver::driver::CompileController;
 
 fn find_sysroot() -> String {
@@ -28,7 +27,7 @@ fn find_sysroot() -> String {
     }
 }
 
-pub fn call_with_crate_tcx(mut args: Vec<String>, rlib: &str, f: Rc<Fn(TyCtxt, &CrateMetadata)>) {
+pub fn call_with_crate_tcx(mut args: Vec<String>, rlib: String, f: Box<Cb>) {
     println!("Reading rlib {}", rlib);
 
     let sysroot_flag = String::from("--sysroot");
@@ -36,62 +35,71 @@ pub fn call_with_crate_tcx(mut args: Vec<String>, rlib: &str, f: Rc<Fn(TyCtxt, &
         args.push(sysroot_flag);
         args.push(find_sysroot());
     }
+
+    args.push("-Cpanic=abort".to_string()); // otherwise we have to provide `eh_personality`
+
     println!("Rust args: {:?}", args);
-    ::rustc_driver::run_compiler(
-        &args,
-        &mut MyCompilerCalls(RustcDefaultCalls, rlib.to_string(), f),
-        Some(Box::new(MyFileLoader(rlib.to_string())) as Box<_>),
-        None
-    );
+    let result = rustc_driver::run(move || {
+        ::rustc_driver::run_compiler(
+            &args,
+            Box::new(MyCompilerCalls(RustcDefaultCalls, rlib.to_string(), f)),
+            Some(Box::new(MyFileLoader(rlib.to_string())) as Box<_>),
+            None
+        )
+    });
+    ::std::process::exit(result as i32);
 }
 
 struct MyFileLoader(String);
 
-impl ::syntax::codemap::FileLoader for MyFileLoader {
+impl ::syntax::source_map::FileLoader for MyFileLoader {
     fn file_exists(&self, _: &Path) -> bool { true }
     fn abs_path(&self, _: &Path) -> Option<PathBuf> { None }
     fn read_file(&self, _: &Path) -> Result<String, ::std::io::Error> {
         Ok(format!("
         #![feature(no_core)]
         #![feature(rustc_private)]
-        #![feature(panic_unwind)]
-        #![feature(panic_abort)]
         #![feature(compiler_builtins_lib)]
         #![allow(unused_imports)]
         #![no_std] // Replace with `#![no_core]` for reading libcore metadata
+
         extern crate {} as __dummy_name;
         fn main() {{}}", self.0))
     }
 }
 
-struct MyCompilerCalls(RustcDefaultCalls, String, Rc<Fn(TyCtxt, &CrateMetadata)>);
+type Cb = for<'a, 'tcx> Fn(TyCtxt<'a, 'tcx, 'tcx>) + Send;
 
-impl<'a> ::rustc_driver::CompilerCalls<'a> for MyCompilerCalls {
+struct MyCompilerCalls(RustcDefaultCalls, String, Box<Cb>);
+
+impl<'a> CompilerCalls<'a> for MyCompilerCalls {
     fn build_controller(
-        &mut self,
+        self: Box<Self>,
         sess: &Session,
         matches: &::getopts::Matches
     ) -> CompileController<'a> {
-        let mut control = self.0.build_controller(sess, matches);
+        let mut control = Box::new(self.0).build_controller(sess, matches);
         control.after_analysis.stop = Compilation::Stop;
-        let cb = self.2.clone();
         control.after_analysis.callback = Box::new(move |state|{
             let tcx = state.tcx.as_ref().unwrap();
-            let mut extern_crate = None;
-            for item in tcx.hir.krate().items.values() {
-                match item.node {
-                    ::rustc::hir::Item_::ItemExternCrate(_) => {
-                        extern_crate = Some(item.id);
-                        // Continue iterating to get the last `extern crate`
-                    }
-                    _ => {}
-                }
-            }
-            let ext_cnum = tcx.extern_mod_stmt_cnum(tcx.hir.local_def_id(extern_crate.unwrap())).unwrap();
-            let crate_data = tcx.crate_data_as_rc_any(ext_cnum);
-            let crate_data = crate_data.downcast_ref::<CrateMetadata>().unwrap();
-            cb(*tcx, crate_data);
+            (self.2)(*tcx);
         });
         control
     }
+}
+
+pub fn with_crate_metadata<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, f: impl for<'b> FnOnce(&'b CrateMetadata)) {
+    let mut extern_crate = None;
+    for item in tcx.hir().krate().items.values() {
+        match item.node {
+            ::rustc::hir::ItemKind::ExternCrate(_) => {
+                extern_crate = Some(item.id);
+                // Continue iterating to get the last `extern crate`
+            }
+            _ => {}
+        }
+    }
+    let ext_cnum = tcx.extern_mod_stmt_cnum(tcx.hir().local_def_id(extern_crate.unwrap())).unwrap();
+    let crate_data = tcx.crate_data_as_rc_any(ext_cnum);
+    f(crate_data.downcast_ref::<CrateMetadata>().unwrap());
 }

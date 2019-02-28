@@ -48,7 +48,7 @@ macro_rules! commands {
             ]
         }
 
-        pub fn print_for_matches(matches: &ArgMatches, tcx: TyCtxt, crate_data: &CrateMetadata) {
+        pub fn print_for_matches<'a, 'tcx: 'a>(matches: &ArgMatches, tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_data: &CrateMetadata) {
             let cmd = matches.subcommand_name();
             match cmd.unwrap() {
                 $(
@@ -101,21 +101,21 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches
     }
     svmeta! {
         crate_data;
-        (name)
-        (hash)
-        (disambiguator.to_fingerprint)
-        (bool needs_allocator(tcx.sess))
-        (bool has_global_allocator)
-        (bool has_default_lib_allocator)
-        (bool is_panic_runtime(tcx.sess))
-        (bool needs_panic_runtime(tcx.sess))
-        (bool is_compiler_builtins(tcx.sess))
-        (bool is_sanitizer_runtime(tcx.sess))
-        (bool is_profiler_runtime(tcx.sess))
-        (bool is_no_builtins(tcx.sess))
+        //(name)
+        //(hash)
+        //(disambiguator.to_fingerprint)
+        //(bool needs_allocator(tcx.sess))
+        //(bool has_global_allocator)
+        //(bool has_default_lib_allocator)
+        //(bool is_panic_runtime(tcx.sess))
+        //(bool needs_panic_runtime(tcx.sess))
+        //(bool is_compiler_builtins(tcx.sess))
+        //(bool is_sanitizer_runtime(tcx.sess))
+        //(bool is_profiler_runtime(tcx.sess))
+        //(bool is_no_builtins(tcx.sess))
         //(bool has_copy_closures(tcx.sess))
         //(bool has_clone_closures(tcx.sess))
-        (panic_strategy.desc)
+        //(panic_strategy.desc)
     }
 
     println!("{}crate source{}: {} {} {}",
@@ -145,7 +145,7 @@ fn print_deps(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
 
     header!("Native libraries:");
     for native_lib in crate_data.get_native_libraries(tcx.sess) {
-        out_line!(native_lib.name,
+        /*out_line!(native_lib.name,
             "{}",
             match native_lib.kind {
                 NativeLibraryKind::NativeStatic => "static lib",
@@ -153,14 +153,14 @@ fn print_deps(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
                 NativeLibraryKind::NativeFramework => "mac os framework",
                 NativeLibraryKind::NativeUnknown => "<unknown>",
             }
-        );
+        );*/
     }
 
     header!("Dylib dependency formats:");
     for dylib_deps in crate_data.get_dylib_dependency_formats() {
         let ext_crate_data = tcx.crate_data_as_rc_any(dylib_deps.0);
         let ext_crate_data = ext_crate_data.downcast_ref::<CrateMetadata>().unwrap();
-        out_line!(ext_crate_data.name(), "{:?}", dylib_deps.1);
+        out_line!(ext_crate_data.name, "{:?}", dylib_deps.1);
     }
 }
 
@@ -178,7 +178,8 @@ fn print_macros(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) 
                 Some(match macro_kind {
                     MacroKind::Bang => "macro!",
                     MacroKind::Attr => "#[macro]",
-                    MacroKind::Derive => "#[derive(Macro)]"
+                    MacroKind::Derive => "#[derive(Macro)]",
+                    MacroKind::ProcMacroStub => "<proc-macro-stub>",
                 })
             }
             _ => None
@@ -186,12 +187,13 @@ fn print_macros(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) 
     });
 }
 
-fn print_symbols(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
+fn print_symbols<'a, 'tcx: 'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_data: &CrateMetadata, _matches: &ArgMatches) {
     header!("Exported symbols:");
     if crate_data.proc_macros.is_none() {
-        for (exported_symbol, export_level) in crate_data.exported_symbols().into_iter().take(50) {
+        for (exported_symbol, export_level) in crate_data.exported_symbols(tcx).into_iter().take(50) {
             match exported_symbol {
                 ExportedSymbol::NonGeneric(def_id) => println!("    {:>4?} {} ({:?})", export_level, tcx.absolute_item_path_str(def_id), def_id),
+                ExportedSymbol::Generic(def_id, substs) => println!("    {:>4?} {} ({:?}<{:?}>)", export_level, tcx.absolute_item_path_str(def_id), def_id, substs),
                 ExportedSymbol::NoDefId(symbol_name) => println!("    {:>4?} <no def_id> ({:?})", export_level, symbol_name),
             }
         }
@@ -214,7 +216,7 @@ fn print_symbols(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches)
             Def::Union(_) |
             Def::Enum(_) |
             Def::Trait(_) |
-            Def::TyForeign(_) => Some(export.def.kind_name()),
+            Def::ForeignTy(_) => Some(export.def.kind_name()),
             Def::TyAlias(_) => Some("type"),
             _ => None
         }
@@ -229,7 +231,7 @@ fn print_symbols(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches)
             Def::Enum(_) |
             Def::Trait(_) |
             Def::TyAlias(_) |
-            Def::TyForeign(_) |
+            Def::ForeignTy(_) |
             Def::Macro(_, _) => None, // Already handled
             Def::StructCtor(_, _) |
             Def::Variant(_) |
