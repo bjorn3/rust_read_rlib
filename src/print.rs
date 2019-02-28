@@ -74,6 +74,23 @@ commands! {
 }
 
 fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
+    macro_rules! print_crateroot {
+        ( @one $crate_root:ident bool $field:ident) => {
+            svmeta!(@print $field, PrettyBool($crate_root.$field));
+        };
+        ( @one $crate_root:ident $field:ident) => {
+            svmeta!(@print $field, $crate_root.$field);
+        };
+        ( @print $crate_root:ident $name:expr, $val:expr) => {
+            println!("{}{:<30}{}: {:?}", Fg(Cyan), stringify!($name), Fg(Reset), $val);
+        };
+        ( $crate_root:ident; $( ($($tts:tt)*) )* ) => {
+            $(
+                print_crateroot!(@one $crate_root $($tts)*);
+            )*
+        };
+    }
+
     macro_rules! svmeta {
         ( @one $name:ident bool $val:expr) => {
             svmeta!(@print $name, PrettyBool($val));
@@ -90,23 +107,20 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches
             )*
         };
     }
+
+    // docs at https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/schema/struct.CrateRoot.html
+    let crate_root = crate_data.blob.get_root();
+
+    print_crateroot! {
+        crate_root;
+        (name) (triple) (extra_filename) (hash) (disambiguator) (panic_strategy) (edition)
+        (bool has_global_allocator) (bool has_panic_handler) (bool has_default_lib_allocator)
+        (plugin_registrar_fn) (proc_macro_decls_static)
+        (bool compiler_builtins) (bool needs_allocator) (bool needs_panic_runtime) (bool no_builtins) (bool panic_runtime) (bool profiler_runtime) (bool sanitizer_runtime)
+    }
+
     svmeta! {
-        (name crate_data.name)
-        (crate_hash tcx.crate_hash(crate_data.cnum))
-        (crate_disambiguator tcx.crate_disambiguator(crate_data.cnum))
-        (extra_filename tcx.extra_filename(crate_data.cnum))
         (dep_kind tcx.dep_kind(crate_data.cnum))
-        (is_panic_runtime bool tcx.is_panic_runtime(crate_data.cnum))
-        (is_compiler_builtins bool tcx.is_compiler_builtins(crate_data.cnum))
-        (has_global_allocator bool tcx.has_global_allocator(crate_data.cnum))
-        (has_panic_handler bool tcx.has_panic_handler(crate_data.cnum))
-        (is_sanitizer_runtime bool tcx.is_sanitizer_runtime(crate_data.cnum))
-        (is_profiler_runtime bool tcx.is_profiler_runtime(crate_data.cnum))
-        (panic_strategy tcx.panic_strategy(crate_data.cnum))
-        (is_no_builtins bool tcx.is_no_builtins(crate_data.cnum))
-        (plugin_registrar_fn tcx.plugin_registrar_fn(crate_data.cnum))
-        (proc_macro_decls_static tcx.proc_macro_decls_static(crate_data.cnum))
-        (original_crate_name tcx.original_crate_name(crate_data.cnum))
     }
 
     println!("{}crate source{}: {} {} {}",
