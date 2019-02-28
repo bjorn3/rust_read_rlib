@@ -223,7 +223,7 @@ fn print_symbols(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches)
     header!("Items:");
     for_each_export(tcx, &crate_data, tcx.sess, &|export| {
         match export.def {
-            Def::Fn(_) |
+            Def::Fn(_) => Some("fn"),
             Def::Struct(_) |
             Def::Union(_) |
             Def::Enum(_) |
@@ -256,13 +256,13 @@ fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_dat
     fn each_export_inner<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, id: DefIndex, callback: &F, sess: &Session) {
         crate_data.each_child_of_item(id, |e| {
             match e.def {
-                Def::Mod(def_id) => {
-                    //println!("mod {}", tcx.absolute_item_path_str(def_id));
-                    each_export_inner(tcx, crate_data, def_id.index, callback, sess);
-                },
+                //Def::Mod(def_id) => {
+                //    //println!("mod {}", tcx.absolute_item_path_str(def_id));
+                //    each_export_inner(tcx, crate_data, def_id.index, callback, sess);
+                //},
                 _ => {
                     if let Some(name) = callback(e) {
-                        println!("    {}{:<10}{} {}", Fg(Cyan), name, Fg(Reset), tcx.absolute_item_path_str(e.def.def_id()));
+                        println!("    {}{:<10}{} {} ({:?})", Fg(Cyan), name, Fg(Reset), tcx.absolute_item_path_str(e.def.def_id()), e.def.def_id());
                     }
                 },
             }
@@ -271,23 +271,6 @@ fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_dat
     each_export_inner(tcx, crate_data, ::rustc::hir::def_id::CRATE_DEF_INDEX, callback, sess);
 }
 
-/*fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, sess: &Session, callback: &F) {
-    use rustc_metadata::decoder::Metadata;
-    let entries = ::std::collections::HashSet::new();
-    let todo = Vec::new();
-    todo.push(crate_data.root.index.lookup(crate_data.blob.raw_bytes(), ::rustc::hir::def_id::CRATE_DEF_INDEX).unwrap());
-    loop {
-        if let Some(entry) = todo.pop() {
-            if let Some(children) = entry.children {
-                for child in children {
-
-                }
-            }
-        } else {
-            break;
-        }
-    }
-}*/
 fn parse_defid_from_str(s: &str) -> DefId {
     let regex = Regex::new(r#"(\d+)/(0|1):(\d+)"#).unwrap();
     // 1/0:14824
