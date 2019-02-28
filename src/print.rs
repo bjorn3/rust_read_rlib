@@ -90,6 +90,10 @@ fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches
             )*
         };
     }
+
+    // docs at https://doc.rust-lang.org/nightly/nightly-rustc/rustc_metadata/schema/struct.CrateRoot.html
+    let crate_root = crate_data.blob.get_root();
+
     svmeta! {
         (name crate_data.name)
         (crate_hash tcx.crate_hash(crate_data.cnum))
