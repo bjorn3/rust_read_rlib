@@ -14,7 +14,7 @@ use regex::Regex;
 
 struct PrettyBool(bool);
 
-impl fmt::Display for PrettyBool {
+impl fmt::Debug for PrettyBool {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.0 {
             true => write!(f, "{}true{}", Fg(Green), Fg(Reset)),
@@ -75,47 +75,38 @@ commands! {
 
 fn print_metadata(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
     macro_rules! svmeta {
-        ( @one $crate_data:expr; bool $name:ident) => {
-            svmeta!(@print $name, PrettyBool($crate_data.$name()));
+        ( @one $name:ident bool $val:expr) => {
+            svmeta!(@print $name, PrettyBool($val));
         };
-        ( @one $crate_data:expr; bool $name:ident ($arg:expr)) => {
-            svmeta!(@print $name, PrettyBool($crate_data.$name($arg)));
+        ( @one $name:ident $val:expr) => {
+            svmeta!(@print $name, $val);
         };
-        ( @one $crate_data:expr; $name:ident) => {
-            svmeta!(@print $name, $crate_data.$name());
+        ( @print $name:expr, $val:expr) => {
+            println!("{}{:<30}{}: {:?}", Fg(Cyan), stringify!($name), Fg(Reset), $val);
         };
-        ( @one $crate_data:expr; $name:ident ($arg:expr)) => {
-            svmeta!(@print $name, $crate_data.$name($arg));
-        };
-        ( @one $crate_data:expr; $name:ident . $call:ident) => {
-            svmeta!(@print $name, $crate_data.$name().$call());
-        };
-        ( @print $name:ident, $val:expr) => {
-            println!("{}{:<30}{}: {}", Fg(Cyan), stringify!($name), Fg(Reset), $val);
-        };
-        ( $crate_data:expr; $( ($($tts:tt)*) )* ) => {
+        ( $( ($($tts:tt)*) )* ) => {
             $(
-                svmeta!(@one $crate_data; $($tts)*);
+                svmeta!(@one $($tts)*);
             )*
         };
     }
     svmeta! {
-        crate_data;
-        //(name)
-        //(hash)
-        //(disambiguator.to_fingerprint)
-        //(bool needs_allocator(tcx.sess))
-        //(bool has_global_allocator)
-        //(bool has_default_lib_allocator)
-        //(bool is_panic_runtime(tcx.sess))
-        //(bool needs_panic_runtime(tcx.sess))
-        //(bool is_compiler_builtins(tcx.sess))
-        //(bool is_sanitizer_runtime(tcx.sess))
-        //(bool is_profiler_runtime(tcx.sess))
-        //(bool is_no_builtins(tcx.sess))
-        //(bool has_copy_closures(tcx.sess))
-        //(bool has_clone_closures(tcx.sess))
-        //(panic_strategy.desc)
+        (name crate_data.name)
+        (crate_hash tcx.crate_hash(crate_data.cnum))
+        (crate_disambiguator tcx.crate_disambiguator(crate_data.cnum))
+        (extra_filename tcx.extra_filename(crate_data.cnum))
+        (dep_kind tcx.dep_kind(crate_data.cnum))
+        (is_panic_runtime bool tcx.is_panic_runtime(crate_data.cnum))
+        (is_compiler_builtins bool tcx.is_compiler_builtins(crate_data.cnum))
+        (has_global_allocator bool tcx.has_global_allocator(crate_data.cnum))
+        (has_panic_handler bool tcx.has_panic_handler(crate_data.cnum))
+        (is_sanitizer_runtime bool tcx.is_sanitizer_runtime(crate_data.cnum))
+        (is_profiler_runtime bool tcx.is_profiler_runtime(crate_data.cnum))
+        (panic_strategy tcx.panic_strategy(crate_data.cnum))
+        (is_no_builtins bool tcx.is_no_builtins(crate_data.cnum))
+        (plugin_registrar_fn tcx.plugin_registrar_fn(crate_data.cnum))
+        (proc_macro_decls_static tcx.proc_macro_decls_static(crate_data.cnum))
+        (original_crate_name tcx.original_crate_name(crate_data.cnum))
     }
 
     println!("{}crate source{}: {} {} {}",

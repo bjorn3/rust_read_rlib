@@ -63,8 +63,8 @@ impl ::syntax::source_map::FileLoader for MyFileLoader {
         #![allow(unused_imports)]
         #![no_std] // Replace with `#![no_core]` for reading libcore metadata
 
-        extern crate {} as __dummy_name;
-        fn main() {{}}", self.0))
+        extern crate {} as __{};
+        fn main() {{}}", self.0, self.0))
     }
 }
 
