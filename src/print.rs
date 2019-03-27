@@ -137,7 +137,7 @@ fn print_lang_items(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatch
             // Double format for the alignment
             format!("{:?}", LangItem::from_u32(lang_item.1 as u32).unwrap()),
             "{}",
-            tcx.absolute_item_path_str(lang_item.0),
+            tcx.def_path_str(lang_item.0),
         );
     }
 }
@@ -197,8 +197,8 @@ fn print_symbols<'a, 'tcx: 'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_data: &CrateMe
     if crate_data.proc_macros.is_none() {
         for (exported_symbol, export_level) in crate_data.exported_symbols(tcx).into_iter().take(50) {
             match exported_symbol {
-                ExportedSymbol::NonGeneric(def_id) => println!("    {:>4?} {} ({:?})", export_level, tcx.absolute_item_path_str(def_id), def_id),
-                ExportedSymbol::Generic(def_id, substs) => println!("    {:>4?} {} ({:?}<{:?}>)", export_level, tcx.absolute_item_path_str(def_id), def_id, substs),
+                ExportedSymbol::NonGeneric(def_id) => println!("    {:>4?} {} ({:?})", export_level, tcx.def_path_str(def_id), def_id),
+                ExportedSymbol::Generic(def_id, substs) => println!("    {:>4?} {} ({:?}<{:?}>)", export_level, tcx.def_path_str(def_id), def_id, substs),
                 ExportedSymbol::NoDefId(symbol_name) => println!("    {:>4?} <no def_id> ({:?})", export_level, symbol_name),
             }
         }
@@ -211,7 +211,7 @@ fn print_symbols<'a, 'tcx: 'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_data: &CrateMe
     let mut trait_impls = Vec::new();
     crate_data.get_implementations_for_trait(None, &mut trait_impls);
     for def_id in trait_impls.into_iter().take(50) {
-        println!("    {}", tcx.absolute_item_path_str(def_id));
+        println!("    {}", tcx.def_path_str(def_id));
     }
 
     header!("Types:");
@@ -238,9 +238,8 @@ fn print_symbols<'a, 'tcx: 'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_data: &CrateMe
             Def::TyAlias(_) |
             Def::ForeignTy(_) |
             Def::Macro(_, _) => None, // Already handled
-            Def::StructCtor(_, _) |
-            Def::Variant(_) |
-            Def::VariantCtor(_, _) => None, // Not very useful
+            Def::Ctor(..) |
+            Def::Variant(_) => None, // Not very useful
             Def::Const(_) => Some("const"),
             Def::Static(_, _) => Some("static"),
             _ => Some(export.def.kind_name()),
@@ -251,7 +250,7 @@ fn print_symbols<'a, 'tcx: 'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_data: &CrateMe
 fn print_mir(tcx: TyCtxt, _crate_data: &CrateMetadata, matches: &ArgMatches) {
     let def_id = matches.value_of("DEFID").unwrap();
     let def_id = parse_defid_from_str(def_id);
-    println!("mir for {}:\n", tcx.absolute_item_path_str(def_id));
+    println!("mir for {}:\n", tcx.def_path_str(def_id));
     let mut mir = ::std::io::Cursor::new(Vec::new());
     ::rustc_mir::util::write_mir_pretty(tcx, Some(def_id), &mut mir).unwrap();
     let mir = String::from_utf8(mir.into_inner()).unwrap();
@@ -264,12 +263,12 @@ fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_dat
         crate_data.each_child_of_item(id, |e| {
             match e.def {
                 Def::Mod(def_id) => {
-                    //println!("mod {}", tcx.absolute_item_path_str(def_id));
+                    //println!("mod {}", tcx.def_path_str(def_id));
                     each_export_inner(tcx, crate_data, def_id.index, callback, sess);
                 },
                 _ => {
                     if let Some(name) = callback(e) {
-                        println!("    {}{:<10}{} {}", Fg(Cyan), name, Fg(Reset), tcx.absolute_item_path_str(e.def.def_id()));
+                        println!("    {}{:<10}{} {}", Fg(Cyan), name, Fg(Reset), tcx.def_path_str(e.def.def_id()));
                     }
                 },
             }
