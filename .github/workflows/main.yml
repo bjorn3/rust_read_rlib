@@ -13,6 +13,11 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: nightly
+        components: rustc-dev
+
     - uses: actions-rs/cargo@v1
       with:
         command: build
