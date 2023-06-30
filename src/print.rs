@@ -1,12 +1,13 @@
 use std::fmt;
 
 use rustc::ty::TyCtxt;
-use rustc::session::Session;
-use rustc::middle::lang_items::LangItem;
+use rustc_session::Session;
+use rustc_hir::lang_items::LangItem;
 use rustc::middle::exported_symbols::ExportedSymbol;
-use rustc::hir::def::{Export, Def};
-use rustc::hir::def_id::{DefId, CrateNum, DefIndex, DefIndexAddressSpace};
-use rustc_metadata::cstore::{CrateMetadata, NativeLibraryKind};
+use rustc_hir::def::DefKind;
+use rustc_hir::def_id::{DefId, CrateNum, DefIndex, DefIndexAddressSpace};
+use rustc_metadata::rmeta::decoder::CrateMetadata;
+use rustc_span::def_id::CRATE_DEF_INDEX;
 
 use termion::color::*;
 use clap::{App, SubCommand, Arg, ArgMatches};
@@ -48,7 +49,7 @@ macro_rules! commands {
             ]
         }
 
-        pub fn print_for_matches<'a, 'tcx: 'a>(matches: &ArgMatches, tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_data: &CrateMetadata) {
+        pub fn print_for_matches<'tcx>(matches: &ArgMatches, tcx: TyCtxt<'tcx>, crate_data: &CrateMetadata) {
             let cmd = matches.subcommand_name();
             match cmd.unwrap() {
                 $(
@@ -149,7 +150,7 @@ fn print_deps(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
     }
 
     header!("Native libraries:");
-    for native_lib in crate_data.get_native_libraries(tcx.sess) {
+    for native_lib in tcx.native_libraries(crate_data.cnum) {
         /*out_line!(native_lib.name,
             "{}",
             match native_lib.kind {
@@ -163,9 +164,7 @@ fn print_deps(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) {
 
     header!("Dylib dependency formats:");
     for dylib_deps in crate_data.get_dylib_dependency_formats() {
-        let ext_crate_data = tcx.crate_data_as_rc_any(dylib_deps.0);
-        let ext_crate_data = ext_crate_data.downcast_ref::<CrateMetadata>().unwrap();
-        out_line!(ext_crate_data.name, "{:?}", dylib_deps.1);
+        out_line!(tcx.crate_name(dylib_deps.0), "{:?}", dylib_deps.1);
     }
 }
 
@@ -176,15 +175,15 @@ fn print_macros(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) 
     }
 
     header!("Macros:");
-    for_each_export(tcx, &crate_data, tcx.sess, &|export| {
-        use syntax::ext::base::MacroKind;
-        match export.def {
-            Def::Macro(_def_id, macro_kind) => {
+    for_each_export(tcx, &crate_data, tcx.sess, &|def_id| {
+        use rustc_span::MacroKind;
+        match tcx.def_kind(def_id) {
+            DefKind::Macro(macro_kind) => {
                 Some(match macro_kind {
                     MacroKind::Bang => "macro!",
                     MacroKind::Attr => "#[macro]",
                     MacroKind::Derive => "#[derive(Macro)]",
-                    MacroKind::ProcMacroStub => "<proc-macro-stub>",
+                    // MacroKind::ProcMacroStub => "<proc-macro-stub>",
                 })
             }
             _ => None
@@ -192,7 +191,7 @@ fn print_macros(tcx: TyCtxt, crate_data: &CrateMetadata, _matches: &ArgMatches) 
     });
 }
 
-fn print_symbols<'a, 'tcx: 'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_data: &CrateMetadata, _matches: &ArgMatches) {
+fn print_symbols<'tcx>(tcx: TyCtxt<'tcx>, crate_data: &CrateMetadata, _matches: &ArgMatches) {
     header!("Exported symbols:");
     if crate_data.proc_macros.is_none() {
         for (exported_symbol, export_level) in crate_data.exported_symbols(tcx).into_iter().take(50) {
@@ -215,34 +214,34 @@ fn print_symbols<'a, 'tcx: 'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, crate_data: &CrateMe
     }
 
     header!("Types:");
-    for_each_export(tcx, &crate_data, tcx.sess, &|export| {
-        match export.def {
-            Def::Struct(_) |
-            Def::Union(_) |
-            Def::Enum(_) |
-            Def::Trait(_) |
-            Def::ForeignTy(_) => Some(export.def.kind_name()),
-            Def::TyAlias(_) => Some("type"),
+    for_each_export(tcx, &crate_data, tcx.sess, &|def_id| {
+        match tcx.def_kind(def_id) {
+            DefKind::Struct |
+            DefKind::Union |
+            DefKind::Enum |
+            DefKind::Trait |
+            DefKind::ForeignTy => Some(tcx.def_kind(def_id).descr(def_id)),
+            DefKind::TyAlias => Some("type"),
             _ => None
         }
     });
 
     header!("Items:");
-    for_each_export(tcx, &crate_data, tcx.sess, &|export| {
-        match export.def {
-            Def::Fn(_) |
-            Def::Struct(_) |
-            Def::Union(_) |
-            Def::Enum(_) |
-            Def::Trait(_) |
-            Def::TyAlias(_) |
-            Def::ForeignTy(_) |
-            Def::Macro(_, _) => None, // Already handled
-            Def::Ctor(..) |
-            Def::Variant(_) => None, // Not very useful
-            Def::Const(_) => Some("const"),
-            Def::Static(_, _) => Some("static"),
-            _ => Some(export.def.kind_name()),
+    for_each_export(tcx, &crate_data, tcx.sess, &|def_id| {
+        match tcx.def_kind(def_id) {
+            DefKind::Fn |
+            DefKind::Struct |
+            DefKind::Union |
+            DefKind::Enum |
+            DefKind::Trait |
+            DefKind::TyAlias |
+            DefKind::ForeignTy |
+            DefKind::Macro(_) => None, // Already handled
+            DefKind::Ctor(..) |
+            DefKind::Variant => None, // Not very useful
+            DefKind::Const => Some("const"),
+            DefKind::Static(_) => Some("static"),
+            other => Some(other.descr(def_id)),
         }
     });
 }
@@ -252,29 +251,28 @@ fn print_mir(tcx: TyCtxt, _crate_data: &CrateMetadata, matches: &ArgMatches) {
     let def_id = parse_defid_from_str(def_id);
     println!("mir for {}:\n", tcx.def_path_str(def_id));
     let mut mir = ::std::io::Cursor::new(Vec::new());
-    ::rustc_mir::util::write_mir_pretty(tcx, Some(def_id), &mut mir).unwrap();
+    ::rustc::mir::write_mir_pretty(tcx, Some(def_id), &mut mir).unwrap();
     let mir = String::from_utf8(mir.into_inner()).unwrap();
     println!("{}", mir);
 }
 
-fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, sess: &Session, callback: &F) {
-    use rustc::hir::def_id::DefIndex;
-    fn each_export_inner<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, id: DefIndex, callback: &F, sess: &Session) {
-        crate_data.each_child_of_item(id, |e| {
-            match e.def {
-                Def::Mod(def_id) => {
+fn for_each_export<F: Fn(DefId) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, sess: &Session, callback: &F) {
+    fn each_export_inner<F: Fn(DefId) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, id: DefIndex, callback: &F, sess: &Session) {
+        crate_data.each_child_of_item(id, |def_id| {
+            match tcx.def_kind(def_id) {
+                DefKind::Mod => {
                     //println!("mod {}", tcx.def_path_str(def_id));
                     each_export_inner(tcx, crate_data, def_id.index, callback, sess);
                 },
                 _ => {
-                    if let Some(name) = callback(e) {
-                        println!("    {}{:<10}{} {}", Fg(Cyan), name, Fg(Reset), tcx.def_path_str(e.def.def_id()));
+                    if let Some(name) = callback(def_id) {
+                        println!("    {}{:<10}{} {}", Fg(Cyan), name, Fg(Reset), tcx.def_path_str(def_id));
                     }
                 },
             }
         }, sess);
     }
-    each_export_inner(tcx, crate_data, ::rustc::hir::def_id::CRATE_DEF_INDEX, callback, sess);
+    each_export_inner(tcx, crate_data, CRATE_DEF_INDEX, callback, sess);
 }
 
 /*fn for_each_export<F: Fn(Export) -> Option<&'static str>>(tcx: TyCtxt, crate_data: &CrateMetadata, sess: &Session, callback: &F) {
